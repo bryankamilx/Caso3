@@ -90,8 +90,8 @@ public class Cliente {
 
                     IvParameterSpec iv = new IvParameterSpec(Base64.getDecoder().decode(entrada.readLine()));
 
-                    String userId = "user123";
-                    String packageId = "packageABC";
+                    String userId = "user2";     // ID de usuario a consultar
+                    String packageId = "package2"; // ID del paquete a consultar
 
                     byte[] userIdEncrypted = cifrarAES(userId.getBytes(), aesKey, iv);
                     byte[] packageIdEncrypted = cifrarAES(packageId.getBytes(), aesKey, iv);
@@ -104,12 +104,10 @@ public class Cliente {
                     salida.println(Base64.getEncoder().encodeToString(userIdHMAC));
                     salida.println(Base64.getEncoder().encodeToString(packageIdHMAC));
 
-                    String respuesta = entrada.readLine();
-                    if ("RECIBIDO".equals(respuesta)) {
-                        System.out.println("Servidor confirmó la recepción de los datos.");
-                    } else {
-                        System.out.println("Error en la recepción de los datos por parte del servidor.");
-                    }
+                    // Leer la respuesta del estado del paquete
+                    String estadoPaquete = entrada.readLine();
+                    System.out.println("Estado del paquete: " + estadoPaquete);
+
                 } else {
                     System.out.println("ERROR FIRMA");
                 }

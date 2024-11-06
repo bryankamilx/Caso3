@@ -12,6 +12,8 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 import java.util.Scanner;
 
@@ -20,6 +22,7 @@ public class Servidor {
     private PrivateKey privateKey;
     private BigInteger p, g, gx, x;
     private BigInteger sharedSecret; // Llave maestra
+    private Map<String, Map<String, String>> paqueteEstados; // Estructura para almacenar estados de paquetes
 
     public Servidor() {
         try {
@@ -35,9 +38,44 @@ public class Servidor {
             try (FileOutputStream fos = new FileOutputStream("privateKeyServidor.key")) {
                 fos.write(privateKey.getEncoded());
             }
+
+            // Cargar la tabla de paquetes desde el archivo
+            cargarPaquetes("paquetes.txt");
+
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private void cargarPaquetes(String filename) {
+        paqueteEstados = new HashMap<>();
+        try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] partes = line.split(" ");
+                if (partes.length == 3) {
+                    String userId = partes[0];
+                    String packageId = partes[1];
+                    String estado = partes[2];
+
+                    // Almacenar el estado en la estructura de datos
+                    paqueteEstados.putIfAbsent(userId, new HashMap<>());
+                    paqueteEstados.get(userId).put(packageId, estado);
+                }
+            }
+            System.out.println("Tabla de paquetes cargada correctamente.");
+        } catch (IOException e) {
+            System.out.println("Error al cargar la tabla de paquetes.");
+            e.printStackTrace();
+        }
+    }
+
+    private String obtenerEstadoPaquete(String userId, String packageId) {
+        // Buscar el estado del paquete
+        if (paqueteEstados.containsKey(userId) && paqueteEstados.get(userId).containsKey(packageId)) {
+            return paqueteEstados.get(userId).get(packageId);
+        }
+        return "DESCONOCIDO"; // Si no se encuentra, devolver DESCONOCIDO
     }
 
     private byte[] descifrarAES(byte[] data, SecretKey aesKey, IvParameterSpec iv) throws Exception {
@@ -154,15 +192,25 @@ public class Servidor {
                         byte[] userIdHMAC = Base64.getDecoder().decode(entrada.readLine());
                         byte[] packageIdHMAC = Base64.getDecoder().decode(entrada.readLine());
 
+                        // Descifrar los datos
                         byte[] userId = descifrarAES(userIdEncrypted, aesKey, iv);
                         byte[] packageId = descifrarAES(packageIdEncrypted, aesKey, iv);
 
+                        // Imprimir los datos descifrados
+                        System.out.println("ID de Usuario recibido (descifrado): " + new String(userId));
+                        System.out.println("ID del Paquete recibido (descifrado): " + new String(packageId));
+
+                        // Verificar HMACs
                         boolean userIdHMACValid = verificarHMAC(userId, userIdHMAC, hmacKey);
                         boolean packageIdHMACValid = verificarHMAC(packageId, packageIdHMAC, hmacKey);
 
                         if (userIdHMACValid && packageIdHMACValid) {
                             System.out.println("HMAC verificado correctamente. Datos recibidos con integridad.");
-                            salida.println("RECIBIDO");
+
+                            // Buscar y enviar el estado del paquete
+                            String estado = obtenerEstadoPaquete(new String(userId), new String(packageId));
+                            salida.println(estado);
+                            System.out.println("Estado del paquete enviado: " + estado);
                         } else {
                             System.out.println("Error en la verificación del HMAC.");
                         }
