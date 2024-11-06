@@ -5,7 +5,6 @@ import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import javax.crypto.KeyAgreement;
 import java.io.*;
 import java.math.BigInteger;
 import java.net.ServerSocket;
@@ -32,6 +31,7 @@ public class Servidor {
             try (FileOutputStream fos = new FileOutputStream("publicKeyServidor.key")) {
                 fos.write(pair.getPublic().getEncoded());
             }
+
             try (FileOutputStream fos = new FileOutputStream("privateKeyServidor.key")) {
                 fos.write(privateKey.getEncoded());
             }
@@ -40,17 +40,26 @@ public class Servidor {
         }
     }
 
-    private void cargarLlavePrivada() throws Exception {
-        byte[] privateKeyBytes = Files.readAllBytes(Paths.get("privateKeyServidor.key"));
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        privateKey = keyFactory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
+    private byte[] descifrarAES(byte[] data, SecretKey aesKey, IvParameterSpec iv) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        cipher.init(Cipher.DECRYPT_MODE, aesKey, iv);
+        return cipher.doFinal(data);
+    }
+
+    private boolean verificarHMAC(byte[] data, byte[] hmac, SecretKey hmacKey) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA384");
+        mac.init(hmacKey);
+        byte[] calculatedHMAC = mac.doFinal(data);
+        return MessageDigest.isEqual(calculatedHMAC, hmac);
     }
 
     private BigInteger[] generarPGx(String openSslPath) {
+        BigInteger p = null;
+        BigInteger g = null;
+        BigInteger gx = null;
         try {
             Process process = Runtime.getRuntime().exec(openSslPath + " dhparam -text 1024");
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-
             String line;
             StringBuilder primeHex = new StringBuilder();
             boolean readingPrime = false;
@@ -75,7 +84,6 @@ public class Servidor {
 
             x = new BigInteger(1024, new Random());
             gx = g.modPow(x, p);
-
             System.out.println("Valor de G: " + g);
             System.out.println("Valor de P: " + p);
             System.out.println("Valor de G^x: " + gx);
@@ -84,24 +92,6 @@ public class Servidor {
             e.printStackTrace();
         }
         return new BigInteger[]{p, g, gx};
-    }
-
-    private IvParameterSpec generarIV() {
-        byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
-        return new IvParameterSpec(iv);
-    }
-
-    private byte[] cifrarAES(byte[] data, SecretKey aesKey, IvParameterSpec iv) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-        cipher.init(Cipher.ENCRYPT_MODE, aesKey, iv);
-        return cipher.doFinal(data);
-    }
-
-    private byte[] generarHMAC(byte[] data, SecretKey hmacKey) throws Exception {
-        Mac mac = Mac.getInstance("HmacSHA384");
-        mac.init(hmacKey);
-        return mac.doFinal(data);
     }
 
     public void iniciarServidor(String openSslPath) {
@@ -145,7 +135,7 @@ public class Servidor {
                         salida.println(gx.toString());
                         salida.println(firmaCifrada);
 
-                        BigInteger gy = new BigInteger(entrada.readLine());
+                        BigInteger gy = new BigInteger(entrada.readLine().trim());
                         sharedSecret = gy.modPow(x, p);
 
                         MessageDigest digest = MessageDigest.getInstance("SHA-512");
@@ -154,19 +144,27 @@ public class Servidor {
                         SecretKey aesKey = new SecretKeySpec(hash, 0, 32, "AES");
                         SecretKey hmacKey = new SecretKeySpec(hash, 32, 32, "HmacSHA384");
 
-                        IvParameterSpec iv = generarIV();
-                        salida.println(Base64.getEncoder().encodeToString(iv.getIV()));
+                        byte[] ivBytes = new byte[16];
+                        new SecureRandom().nextBytes(ivBytes);
+                        IvParameterSpec iv = new IvParameterSpec(ivBytes);
+                        salida.println(Base64.getEncoder().encodeToString(ivBytes));
 
-                        String mensajeCifrado = entrada.readLine();
-                        String hmacRecibido = entrada.readLine();
+                        byte[] userIdEncrypted = Base64.getDecoder().decode(entrada.readLine());
+                        byte[] packageIdEncrypted = Base64.getDecoder().decode(entrada.readLine());
+                        byte[] userIdHMAC = Base64.getDecoder().decode(entrada.readLine());
+                        byte[] packageIdHMAC = Base64.getDecoder().decode(entrada.readLine());
 
-                        byte[] mensajeDescifrado = cifrarAES(Base64.getDecoder().decode(mensajeCifrado), aesKey, iv);
-                        byte[] hmacCalculado = generarHMAC(mensajeDescifrado, hmacKey);
+                        byte[] userId = descifrarAES(userIdEncrypted, aesKey, iv);
+                        byte[] packageId = descifrarAES(packageIdEncrypted, aesKey, iv);
 
-                        if (MessageDigest.isEqual(hmacCalculado, Base64.getDecoder().decode(hmacRecibido))) {
+                        boolean userIdHMACValid = verificarHMAC(userId, userIdHMAC, hmacKey);
+                        boolean packageIdHMACValid = verificarHMAC(packageId, packageIdHMAC, hmacKey);
+
+                        if (userIdHMACValid && packageIdHMACValid) {
+                            System.out.println("HMAC verificado correctamente. Datos recibidos con integridad.");
                             salida.println("RECIBIDO");
                         } else {
-                            salida.println("ERROR");
+                            System.out.println("Error en la verificación del HMAC.");
                         }
                     }
                 }
@@ -174,6 +172,12 @@ public class Servidor {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private void cargarLlavePrivada() throws Exception {
+        byte[] privateKeyBytes = Files.readAllBytes(Paths.get("privateKeyServidor.key"));
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        privateKey = keyFactory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
     }
 
     public static void main(String[] args) {
